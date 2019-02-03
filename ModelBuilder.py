@@ -6,6 +6,21 @@ from collections import OrderedDict
 def buildSequentialNetwork(layers=[], 
                          act_func=nn.ReLU,
                          output_act_func=nn.Softmax):
+    '''Build a sequential neural network
+    
+    :param layers: List of dimensions of the layers in a neural network, defaults to []
+    :param layers: list, optional
+    :param act_func: activation function, defaults to nn.ReLU
+    :param act_func: function, optional
+    :param output_act_func: output activation function, defaults to nn.Softmax
+    :param output_act_func: function, optional
+    :return: Sequential Neural Network
+    :rtype: nn.Sequential
+    '''
+
+    ## TODO
+    ## Handle dropout layers. 
+
     seq_layers = OrderedDict()
 
     # Base names for layers

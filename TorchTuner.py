@@ -4,9 +4,6 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-## TODO
-## Need a better name for accuracy function. 
-
 def evaluateModel(model=None,
                   train_dataset=None,
                   val_dataset=None,
@@ -16,6 +13,33 @@ def evaluateModel(model=None,
                   epochs=9,
                   batch_size=4,
                   accuracy_func=None):
+    '''Evaluates a model and returns loss and accuracy
+    
+    Builds and executes the entire training and validation pipeline.
+    Runs implicitly on the GPU
+    
+    :param model: model to be run, defaults to None
+    :param model: sequential at the moment, optional
+    :param train_dataset: training dataset, defaults to None
+    :param train_dataset: torch.utils.data.Dataset, optional
+    :param val_dataset: validation dataset, defaults to None
+    :param val_dataset: torch.utils.data.Dataset, optional
+    :param optimizer_func: function to obtain optimizer, defaults to None
+    :param optimizer_func: torch.optim, optional
+    :param optimizer_param: parameters for optimizer, defaults to None
+    :param optimizer_param: dict, optional
+    :param criterion_func: function to obtain loss function, defaults to None
+    :param criterion_func: torch.nn, optional
+    :param epochs: number of epochs, defaults to 9
+    :param epochs: int, optional
+    :param batch_size: size of batch, defaults to 4
+    :param batch_size: int, optional
+    :param accuracy_func: custom function to calculate accuracy, defaults to None
+    :param accuracy_func: function, optional
+    :return: [description]
+    :rtype: [type]
+    '''
+
 
     ## Needs to return the model itself, with its weights etc
 

@@ -2,8 +2,9 @@ import os
 import json
 import torch
 import pprint
-import torch.nn as nn
 
+import numpy as np
+import torch.nn as nn
 import matplotlib.pyplot as plt
 import seaborn as sns
 
@@ -42,14 +43,18 @@ class TorchTuner:
 
     MODEL_PREFIX = 'model_'
     EXT = '.pth'
+    PARAM_EXT = '.json'
+    MODEL_NAME_SEP = '_'
 
 
     def __init__(self, 
                  model=None, 
+                 model_name='myModel',
                  criterion_func=None,
                  accuracy_func=None,
                  train_dataset=None,
-                 val_dataset=None,
+                 test_dataset=None,
+                 val_percentage=0.15,
                  res_dir=None):
         '''Initialise torch tuner
         
@@ -61,24 +66,48 @@ class TorchTuner:
         :param accuracy_func: Custom function, optional
         :param train_dataset: Training dataset, defaults to None
         :param train_dataset: torch.utils.data.Dataset, optional
-        :param val_dataset: Validation dataset, defaults to None
-        :param val_dataset: torch.utils.data.Dataset, optional
+        :param test_dataset: Test dataset, defaults to None
+        :param test_dataset: torch.utils.data.Dataset, optional
+        :param val_percentage: Percentage of training set to be used as test set, defaults to 0.15, ie, 15%
+        :param val_percentage: float, optional
         :param res_dir: Directory where models and results are saved, defaults to None
         :param res_dir: string, optional
         '''
 
+        self.name = model_name
         self.params = []
         self.param_name_prefix = 'param_'
         self.model = model
         self.criterion = criterion_func()
         self.accuracy_func = accuracy_func
         self.train_dataset = train_dataset
-        self.val_dataset = val_dataset
+        self.test_dataset = test_dataset
         self.results = {}
         self.res_dir = res_dir
 
+        if train_dataset is not None:
+            self.train_sampler, self.val_sampler = self._getTrainValSampler(train_dataset, val_percentage)
+
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+        ## TODO
+        ## Test loader will be interesting
+        # self.test_loader = DataLoader(dataset=self.test_dataset, batch_size=batch_size, shuffle=True)
+
         # Reporting apparatus
         self.pp = pprint.PrettyPrinter(indent=4)
+
+    def _getTrainValSampler(self, dataset, val_percentage):
+        indices = list(range(len(dataset)))
+        split = int(val_percentage * len(dataset))
+        np.random.seed(9)
+        np.random.shuffle(indices)
+        train_indices, val_indices = indices[split:], indices[:split]
+
+        train_sampler = torch.utils.data.sampler.SubsetRandomSampler(train_indices)
+        val_sampler = torch.utils.data.sampler.SubsetRandomSampler(val_indices)
+        return train_sampler, val_sampler
+
 
     def evaluateModel(self,
                       param_id = None,
@@ -104,10 +133,14 @@ class TorchTuner:
         :rtype: Dictionary
         '''
 
-        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        train_loader = DataLoader(dataset=self.train_dataset, 
+            batch_size=batch_size, 
+            sampler=self.train_sampler)
 
-        train_loader = DataLoader(dataset=self.train_dataset, batch_size=batch_size, shuffle=True)
-        val_loader = DataLoader(dataset=self.val_dataset, batch_size=batch_size, shuffle=True)
+        val_loader = DataLoader(dataset=self.train_dataset, 
+            batch_size=batch_size, 
+            sampler=self.val_sampler)
+
 
         # Training metrics
         tr_loss = []
@@ -124,7 +157,7 @@ class TorchTuner:
 
         # Move to GPU
         model = deepcopy(self.model)
-        model = model.to(device)
+        model = model.to(self.device)
 
         optimizer = optimizer_func(model.parameters(), **optimizer_param)
         criterion = self.criterion
@@ -135,24 +168,22 @@ class TorchTuner:
 
             model.train(True)
 
-            print('Epoch : ', str(e), flush=True)
-            print('Training')
             for data, label in train_loader:
-                data = data.to(device)
-                label = label.to(device)
+                data = data.to(self.device)
+                label = label.to(self.device)
 
                 optimizer.zero_grad()
 
                 output = model(data)
-                output_label = torch.topk(output, 1)[1].view(-1)
-                output = output.view(batch_size, -1)
+                output = output.view(output.size()[0], -1)
 
+                label = label.view(label.size()[0], -1)
                 loss = criterion(output, label)
                 loss.backward()
                 optimizer.step()
 
                 running_loss += loss.item()
-                running_acc += self.accuracy_func(output_label, label)
+                running_acc += self.accuracy_func(output, label)
 
             running_loss /= (len(train_loader) * batch_size)
             running_acc /= (len(train_loader) * batch_size)
@@ -165,20 +196,19 @@ class TorchTuner:
             running_acc= 0
 
             model.eval()
-            print('Validation')
             with torch.no_grad():
                 for data, label in val_loader:
-                    data = data.to(device)
-                    label = label.to(device)
+                    data = data.to(self.device)
+                    label = label.to(self.device)
 
                     output = model(data)
-                    output_label = torch.topk(output, 1)[1].view(-1)
-                    output = output.view(batch_size, -1)
+                    output = output.view(output.size()[0], -1)
+                    label = label.view(label.size()[0], -1)
 
                     loss = criterion(output, label)
 
                     running_loss += loss.item()
-                    running_acc += self.accuracy_func(output_label, label)
+                    running_acc += self.accuracy_func(output, label)
 
                 running_loss /= (len(val_loader) * batch_size)
                 running_acc /= (len(val_loader) * batch_size)
@@ -285,7 +315,7 @@ class TorchTuner:
             param[TorchTuner._RESULTS] = result
     
     def saveHyperparam(self,
-                       out_file='./param.json'):
+                       out_file=''):
         '''Save hyperparameters to json file
         
         :param out_file: Path to output file, defaults to './param.json'
@@ -295,35 +325,12 @@ class TorchTuner:
         # Change results to savable format
         for param in self.results:
             param[TorchTuner._OPTIM_FUNC] = str(param[TorchTuner._OPTIM_FUNC])
+
+        out_file = out_file + TorchTuner.PARAM_EXT
         
         with open(out_file, 'w') as fp:
             json.dump(self.results, indent=4, sort_keys=True, fp=fp)
     
-    def reportParam(self,
-                  param,
-                  widthInCm=18,
-                  heightInCm=9):
-        '''Report parameter
-        
-        Report and plot parameters
-        
-        :param param: Dict of parameters
-        :type param: dict
-        '''
-        sns.set()
-        plt.rcParams['figure.figsize'] = [widthInCm, heightInCm]
-
-        tr_loss = param[TorchTuner._TR_LOSS]
-        val_loss = param[TorchTuner._VAL_LOSS]
-        pp.print(param)
-
-        epochs = list(range(1, len(tr_loss) + 1))
-        plt.plot(epochs, tr_loss)
-        plt.plot(epochs, val_loss)
-        plt.ylabel('Values')
-        plt.xlabel('Epochs')
-        plt.show()
-
     def saveModel(self,
                   model,
                   param_id,
@@ -331,6 +338,8 @@ class TorchTuner:
                   cur_epoch,
                   total_epoch,
                   batch_size):
+
+        ## We're passing model again because model here is supposed to the model on the GPU.
         save_dict = {
             TorchTuner.MODEL_STATE : model.state_dict(),
             TorchTuner.OPTIMIZER_STATE : optimizer.state_dict(),
@@ -338,8 +347,45 @@ class TorchTuner:
             TorchTuner.TOT_EPOCH : total_epoch,
             TorchTuner.BATCH_SIZE : batch_size,
         }
-        model_name = TorchTuner.MODEL_PREFIX + param_id + TorchTuner.EXT
+        model_name = self.name + TorchTuner.MODEL_NAME_SEP + param_id + TorchTuner.EXT
         res_dir = os.path.abspath(self.res_dir)
         model_path = os.path.join(res_dir, model_name)
         torch.save(save_dict, model_path)
         return model_path
+
+    def testModel(self, param):
+        result = param[TorchTuner._RESULTS]
+        model_path = result[TorchTuner._MODEL_PATH]
+        checkpoint = torch.load(model_path)
+        model_state_dict = checkpoint[TorchTuner.MODEL_STATE]
+        model = deepcopy(self.model)
+        model = model.to(self.device)
+        model.load_state_dict(model_state_dict)
+
+        batch_size = checkpoint[TorchTuner.BATCH_SIZE]
+
+        test_loader = DataLoader(dataset=self.test_dataset, 
+            batch_size=batch_size, 
+            shuffle=True)
+
+        running_acc = 0.0
+        running_loss = 0.0
+
+        for data, label in test_loader:
+            data = data.to(self.device)
+            label = label.to(self.device)
+
+            output = model(data)
+            output = output.view(output.size()[0], -1)
+            label = label.view(label.size()[0], -1)
+
+            loss = self.criterion(output, label)
+
+            running_loss += loss.item()
+            running_acc += self.accuracy_func(output, label)
+
+        running_loss /= (len(test_loader) * batch_size)
+        running_acc /= (len(test_loader) * batch_size)
+        running_acc *= 100
+
+        return running_loss, running_acc
